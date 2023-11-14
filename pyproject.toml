@@ -28,4 +28,4 @@ keywords = ["quantum", "error correction", "bposd", "decoder", "bp-osd"]
 packages = ["bp_osd"]
 
 [project.optional-dependencies]
-dev = ["pip-tools", "pytest"]
+dev = ["pip-tools", "pytest", "pymatching"]
