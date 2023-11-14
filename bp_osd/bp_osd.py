@@ -1,5 +1,6 @@
 from typing import List, FrozenSet, Dict, Tuple, Union
 from dataclasses import dataclass
+from tqdm import tqdm
 
 from ldpc import bposd_decoder
 from scipy.sparse import csc_matrix
@@ -25,10 +26,10 @@ def dict_to_csc_matrix(
 
     Parameters
     ----------
-    elements_dict : dict[int, frozenset[int]]
+    elements_dict
         A dictionary giving the indices of nonzero rows in each column. `elements_dict[i]` is a frozenset of ints
         giving the indices of nonzero rows in column `i`.
-    shape : Tuple[int, int]
+    shape
         The dimensions of the matrix to be returned
 
     Returns
@@ -53,37 +54,15 @@ def dict_to_csc_matrix(
 class DemMatrices:
     check_matrix: csc_matrix
     observables_matrix: csc_matrix
-    edge_check_matrix: csc_matrix
-    edge_observables_matrix: csc_matrix
-    hyperedge_to_edge_matrix: csc_matrix
     priors: np.ndarray
 
 
 def detector_error_model_to_check_matrices(
-    dem: stim.DetectorErrorModel, allow_undecomposed_hyperedges: bool = False
+    dem: stim.DetectorErrorModel,
 ) -> DemMatrices:
-    """
-    Convert a `stim.DetectorErrorModel` into a `DemMatrices` object.
-
-    Parameters
-    ----------
-    dem : stim.DetectorErrorModel
-        A stim DetectorErrorModel
-    allow_undecomposed_hyperedges: bool
-        If True, don't raise an exception if a hyperedge is not decomposable. Instead, the hyperedge `h` is still added
-        to the `DemMatrices.check_matrix`, `DemMatrices.observables_matrix` and `DemMatrices.priors` but it will not
-        have any edges in its decomposition in `DemMatrices.hyperedge_to_edge_matrix[:, h]`.
-    Returns
-    -------
-    DemMatrices
-        A collection of matrices representing the stim DetectorErrorModel
-    """
     hyperedge_ids: Dict[FrozenSet[int], int] = {}
-    edge_ids: Dict[FrozenSet[int], int] = {}
     hyperedge_obs_map: Dict[int, FrozenSet[int]] = {}
-    edge_obs_map: Dict[int, FrozenSet[int]] = {}
     priors_dict: Dict[int, float] = {}
-    hyperedge_to_edge: Dict[int, FrozenSet[int]] = {}
 
     def handle_error(
         prob: float, detectors: List[List[int]], observables: List[List[int]]
@@ -91,36 +70,15 @@ def detector_error_model_to_check_matrices(
         hyperedge_dets = iter_set_xor(detectors)
         hyperedge_obs = iter_set_xor(observables)
 
+        # to avid multiple (hyper)edges being repeated inside the DEM file
         if hyperedge_dets not in hyperedge_ids:
-            hyperedge_ids[hyperedge_dets] = len(hyperedge_ids)
+            hyperedge_ids[hyperedge_dets] = len(hyperedge_ids)  # create new id
             priors_dict[hyperedge_ids[hyperedge_dets]] = 0.0
+
         hid = hyperedge_ids[hyperedge_dets]
         hyperedge_obs_map[hid] = hyperedge_obs
         priors_dict[hid] = priors_dict[hid] * (1 - prob) + prob * (1 - priors_dict[hid])
-
-        eids = []
-        for i in range(len(detectors)):
-            e_dets = frozenset(detectors[i])
-            e_obs = frozenset(observables[i])
-
-            if len(e_dets) > 2:
-                if not allow_undecomposed_hyperedges:
-                    raise ValueError(
-                        "A hyperedge error mechanism was found that was not decomposed into edges. "
-                        "This can happen if you do not set `decompose_errors=True` as required when "
-                        "calling `circuit.detector_error_model`."
-                    )
-                else:
-                    continue
-
-            if e_dets not in edge_ids:
-                edge_ids[e_dets] = len(edge_ids)
-            eid = edge_ids[e_dets]
-            eids.append(eid)
-            edge_obs_map[eid] = e_obs
-
-        if hid not in hyperedge_to_edge:
-            hyperedge_to_edge[hid] = frozenset(eids)
+        return
 
     for instruction in dem.flattened():
         if instruction.type == "error":
@@ -143,6 +101,7 @@ def detector_error_model_to_check_matrices(
             pass
         else:
             raise NotImplementedError()
+
     check_matrix = dict_to_csc_matrix(
         {v: k for k, v in hyperedge_ids.items()},
         shape=(dem.num_detectors, len(hyperedge_ids)),
@@ -153,21 +112,10 @@ def detector_error_model_to_check_matrices(
     priors = np.zeros(len(hyperedge_ids))
     for i, p in priors_dict.items():
         priors[i] = p
-    hyperedge_to_edge_matrix = dict_to_csc_matrix(
-        hyperedge_to_edge, shape=(len(edge_ids), len(hyperedge_ids))
-    )
-    edge_check_matrix = dict_to_csc_matrix(
-        {v: k for k, v in edge_ids.items()}, shape=(dem.num_detectors, len(edge_ids))
-    )
-    edge_observables_matrix = dict_to_csc_matrix(
-        edge_obs_map, shape=(dem.num_observables, len(edge_ids))
-    )
+
     return DemMatrices(
         check_matrix=check_matrix,
         observables_matrix=observables_matrix,
-        edge_check_matrix=edge_check_matrix,
-        edge_observables_matrix=edge_observables_matrix,
-        hyperedge_to_edge_matrix=hyperedge_to_edge_matrix,
         priors=priors,
     )
 
@@ -177,7 +125,8 @@ class BP_OSD:
         self,
         model: Union[stim.Circuit, stim.DetectorErrorModel],
         max_bp_iters: int = 20,
-        bp_method: str = "product_sum",
+        bp_method: str = "minimum_sum",
+        osd_method: str = "osd0",
         **kwargs
     ):
         """
@@ -185,27 +134,33 @@ class BP_OSD:
 
         Parameters
         ----------
-        model : stim.Circuit or stim.DetectorErrorModel
+        model
             A stim.Circuit or a stim.DetectorErrorModel. If a stim.Circuit is provided, it will be converted
-            into a stim.DetectorErrorModel using `stim.Circuit.detector_error_model(decompose_errors=True)`.
-            If a `stim.DetectorErrorModel` is provided it is important that its hyperedges are decomposed
-            into edges (using `decompose_errors=True`) for BP_OSD to provide improved accuracy over
-            a standard (faster) MWPM decoder.
-        max_bp_iters : int
+            into a stim.DetectorErrorModel using `stim.Circuit.detector_error_model()`.
+        max_bp_iters
             The maximum number of interations of belief-propagation to use. Passed to
-            `ldpc.bp_decoder` as the `max_iter` argument. Default 20
-        bp_method : str
+            `ldpc.bposd_decoder` as the `max_iter` argument. Default 20
+        bp_method
             The method of belief-propagation to use. Passed to
             `ldpc.bp_decoder` as the `bp_method` argument. Options include "product_sum",
-             "minimum_sum", "product_sum_log" and "minimum_sum_log" (see https://github.com/quantumgizmos/ldpc
-             for details). Default is "product_sum"
+             "minimum_sum", "product_sum_log", and "minimum_sum_log" (see https://github.com/quantumgizmos/ldpc
+             for details). Default is "minimum_sum" as in https://arxiv.org/pdf/2308.07915.pdf.
+        osd_method
+            The method of ordered statistics decoding to use. Paseed to
+            `ldpc.bposd_decoder` as the `osd_method` argument. Options include "osd0",
+             "osd_cs", and "osd_e" (see https://github.com/quantumgizmos/ldpc
+             for details). Default is "osd0".
         kwargs
-            Additional keyword arguments are passed to `ldpc.bp_decoder`
+            Additional keyword arguments are passed to `ldpc.bposd_decoder`
         """
         if isinstance(model, stim.Circuit):
-            model = model.detector_error_model(decompose_errors=True)
+            model = model.detector_error_model()
         self._initialise_from_detector_error_model(
-            model=model, max_bp_iters=max_bp_iters, bp_method=bp_method, **kwargs
+            model=model,
+            max_bp_iters=max_bp_iters,
+            bp_method=bp_method,
+            osd_method=osd_method,
+            **kwargs
         )
 
     def _initialise_from_detector_error_model(
@@ -213,7 +168,8 @@ class BP_OSD:
         model: stim.DetectorErrorModel,
         *,
         max_bp_iters: int = 20,
-        bp_method: str = "product_sum",
+        bp_method: str = "minimum_sum",
+        osd_method: str = "osd0",
         **kwargs
     ):
         self._model = model
@@ -223,7 +179,7 @@ class BP_OSD:
             max_iter=max_bp_iters,
             bp_method=bp_method,
             channel_probs=self._matrices.priors,
-            input_vector_type="syndrome",
+            osd_method=osd_method,
             **kwargs
         )
 
@@ -233,7 +189,8 @@ class BP_OSD:
         model: stim.DetectorErrorModel,
         *,
         max_bp_iters: int = 20,
-        bp_method: str = "product_sum",
+        bp_method: str = "minimum_sum",
+        osd_method: str = "osd0",
         **kwargs
     ) -> "BP_OSD":
         """
@@ -242,19 +199,22 @@ class BP_OSD:
         Parameters
         ----------
         model : stim.DetectorErrorModel
-            A `stim.DetectorErrorModel`. It is important that the hyperedges are already decomposed
-            into edges (using `decompose_errors=True`) for BP_OSD to provide improved accuracy over
-            a standard (faster) MWPM decoder.
+            A `stim.DetectorErrorModel`. It does not matter if the hyperedges are decomposed.
         max_bp_iters : int
             The maximum number of interations of belief-propagation to use. Passed to
             `ldpc.bp_decoder` as the `max_iter` argument. Default 20
-        bp_method : str
+        bp_method
             The method of belief-propagation to use. Passed to
             `ldpc.bp_decoder` as the `bp_method` argument. Options include "product_sum",
-             "minimum_sum", "product_sum_log" and "minimum_sum_log" (see https://github.com/quantumgizmos/ldpc
-             for details). Default is "product_sum"
+             "minimum_sum", "product_sum_log", and "minimum_sum_log" (see https://github.com/quantumgizmos/ldpc
+             for details). Default is "minimum_sum" as in https://arxiv.org/pdf/2308.07915.pdf.
+        osd_method
+            The method of ordered statistics decoding to use. Paseed to
+            `ldpc.bposd_decoder` as the `osd_method` argument. Options include "osd0",
+             "osd_cs", and "osd_e" (see https://github.com/quantumgizmos/ldpc
+             for details). Default is "osd0".
         kwargs
-            Additional keyword arguments are passed to `ldpc.bp_decoder`
+            Additional keyword arguments are passed to `ldpc.bposd_decoder`
 
 
         Returns
@@ -264,7 +224,10 @@ class BP_OSD:
         """
         bm = cls.__new__(cls)
         bm._initialise_from_detector_error_model(
-            model=model, max_bp_iters=max_bp_iters, bp_method=bp_method, **kwargs
+            model=model,
+            max_bp_iters=max_bp_iters,
+            bp_method=bp_method,
+            osd_method=osd_method**kwargs,
         )
         return bm
 
@@ -274,7 +237,8 @@ class BP_OSD:
         circuit: stim.Circuit,
         *,
         max_bp_iters: int = 20,
-        bp_method: str = "product_sum",
+        bp_method: str = "minimum_sum",
+        osd_method: str = "osd0",
         **kwargs
     ) -> "BP_OSD":
         """
@@ -284,17 +248,22 @@ class BP_OSD:
         ----------
         circuit : stim.Circuit
             A stim.Circuit. The circuit will be converted into a stim.DetectorErrorModel using
-            `stim.Circuit.detector_error_model(decompose_errors=True)`.
+            `stim.Circuit.detector_error_model()`.
         max_bp_iters : int
             The maximum number of interations of belief-propagation to use. Passed to
             `ldpc.bp_decoder` as the `max_iter` argument. Default 20
-        bp_method : str
+        bp_method
             The method of belief-propagation to use. Passed to
             `ldpc.bp_decoder` as the `bp_method` argument. Options include "product_sum",
-             "minimum_sum", "product_sum_log" and "minimum_sum_log" (see https://github.com/quantumgizmos/ldpc
-             for details). Default is "product_sum"
+             "minimum_sum", "product_sum_log", and "minimum_sum_log" (see https://github.com/quantumgizmos/ldpc
+             for details). Default is "minimum_sum" as in https://arxiv.org/pdf/2308.07915.pdf.
+        osd_method
+            The method of ordered statistics decoding to use. Paseed to
+            `ldpc.bposd_decoder` as the `osd_method` argument. Options include "osd0",
+             "osd_cs", and "osd_e" (see https://github.com/quantumgizmos/ldpc
+             for details). Default is "osd0".
         kwargs
-            Additional keyword arguments are passed to `ldpc.bp_decoder`
+            Additional keyword arguments are passed to `ldpc.bposd_decoder`
 
 
         Returns
@@ -303,9 +272,13 @@ class BP_OSD:
             The BP_OSD object for decoding using `model`
         """
         bm = cls.__new__(cls)
-        model = circuit.detector_error_model(decompose_errors=True)
+        model = circuit.detector_error_model()
         bm._initialise_from_detector_error_model(
-            model=model, max_bp_iters=max_bp_iters, bp_method=bp_method, **kwargs
+            model=model,
+            max_bp_iters=max_bp_iters,
+            bp_method=bp_method,
+            osd_method=osd_method,
+            **kwargs
         )
         return bm
 
@@ -328,10 +301,30 @@ class BP_OSD:
             `predictions[i]` is 1 if the decoder predicts observable `i` was flipped and 0 otherwise.
         """
         error_mechanisms = self._bp_osd.decode(syndrome)
-        logical_error = self._matrices.observables_matrix @ error_mechanisms
-        return logical_error
+        logical_errors = (self._matrices.observables_matrix @ error_mechanisms) % 2
+        return logical_errors
 
-    def decode_batch(self, shots: np.ndarray) -> np.ndarray:
+    def decode_to_faults_array(self, syndrome: np.ndarray) -> np.ndarray:
+        """
+        Decode the syndrome and return a prediction of which faults were triggered
+
+        Parameters
+        ----------
+        syndrome : np.ndarray
+            A single shot of syndrome data. This should be a binary array with a length equal to the
+            number of detectors in the `stim.Circuit` or `stim.DetectorErrorModel`. E.g. the syndrome might be
+            one row of shot data sampled from a `stim.CompiledDetectorSampler`.
+
+        Returns
+        -------
+        np.ndarray
+            A binary numpy array `predictions` which predicts which faults were triggered.
+            Its length is equal to the number of observables in the `stim.Circuit` or `stim.DetectorErrorModel`.
+            `predictions[i]` is 1 if the decoder predicts fault `i` was triggered and 0 otherwise.
+        """
+        return self._bp_osd.decode(syndrome)
+
+    def decode_batch(self, shots: np.ndarray, verbose=True) -> np.ndarray:
         """
         Decode a batch of shots of syndrome data. This is just a helper method, equivalent to iterating over each
         shot and calling `BP_OSD.decode` on it.
@@ -351,6 +344,10 @@ class BP_OSD:
         predictions = np.zeros(
             (shots.shape[0], self._matrices.observables_matrix.shape[0]), dtype=bool
         )
-        for i in range(shots.shape[0]):
-            predictions[i, :] = self.decode(shots[i, :])
+        if verbose:
+            for i in tqdm(range(shots.shape[0])):
+                predictions[i, :] = self.decode(shots[i, :])
+        else:
+            for i in range(shots.shape[0]):
+                predictions[i, :] = self.decode(shots[i, :])
         return predictions
