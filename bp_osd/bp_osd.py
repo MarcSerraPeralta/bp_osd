@@ -160,7 +160,7 @@ class BP_OSD:
             max_bp_iters=max_bp_iters,
             bp_method=bp_method,
             osd_method=osd_method,
-            **kwargs
+            **kwargs,
         )
 
     def _initialise_from_detector_error_model(
@@ -180,7 +180,7 @@ class BP_OSD:
             bp_method=bp_method,
             channel_probs=self._matrices.priors,
             osd_method=osd_method,
-            **kwargs
+            **kwargs,
         )
 
     @classmethod
@@ -227,7 +227,8 @@ class BP_OSD:
             model=model,
             max_bp_iters=max_bp_iters,
             bp_method=bp_method,
-            osd_method=osd_method**kwargs,
+            osd_method=osd_method,
+            **kwargs,
         )
         return bm
 
@@ -278,7 +279,7 @@ class BP_OSD:
             max_bp_iters=max_bp_iters,
             bp_method=bp_method,
             osd_method=osd_method,
-            **kwargs
+            **kwargs,
         )
         return bm
 
