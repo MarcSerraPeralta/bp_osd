@@ -23,7 +23,7 @@ def test_bp_osd_performance():
     bp_osd_cs = BP_OSD(
         circuit.detector_error_model(), osd_method="osd_cs", osd_order=40
     )
-    predictions = bp_osd_cs.decode_batch(defects)
+    predictions = bp_osd_cs.decode_batch(defects, verbose=False)
     print(np.average(predictions != log_flips))
     log_prob_bposd = np.average(predictions != log_flips)
 
