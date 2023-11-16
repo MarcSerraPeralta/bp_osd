@@ -125,7 +125,7 @@ class BP_OSD:
         self,
         model: Union[stim.Circuit, stim.DetectorErrorModel],
         max_bp_iters: int = 20,
-        bp_method: str = "minimum_sum",
+        bp_method: str = "product_sum",
         osd_method: str = "osd0",
         **kwargs
     ):
@@ -144,7 +144,8 @@ class BP_OSD:
             The method of belief-propagation to use. Passed to
             `ldpc.bp_decoder` as the `bp_method` argument. Options include "product_sum",
              "minimum_sum", "product_sum_log", and "minimum_sum_log" (see https://github.com/quantumgizmos/ldpc
-             for details). Default is "minimum_sum" as in https://arxiv.org/pdf/2308.07915.pdf.
+             for details). Default is "product_sum" because it achieves better accuracy in the
+             surface code memory experiment.
         osd_method
             The method of ordered statistics decoding to use. Paseed to
             `ldpc.bposd_decoder` as the `osd_method` argument. Options include "osd0",
@@ -168,7 +169,7 @@ class BP_OSD:
         model: stim.DetectorErrorModel,
         *,
         max_bp_iters: int = 20,
-        bp_method: str = "minimum_sum",
+        bp_method: str = "product_sum",
         osd_method: str = "osd0",
         **kwargs
     ):
@@ -189,7 +190,7 @@ class BP_OSD:
         model: stim.DetectorErrorModel,
         *,
         max_bp_iters: int = 20,
-        bp_method: str = "minimum_sum",
+        bp_method: str = "product_sum",
         osd_method: str = "osd0",
         **kwargs
     ) -> "BP_OSD":
@@ -207,7 +208,8 @@ class BP_OSD:
             The method of belief-propagation to use. Passed to
             `ldpc.bp_decoder` as the `bp_method` argument. Options include "product_sum",
              "minimum_sum", "product_sum_log", and "minimum_sum_log" (see https://github.com/quantumgizmos/ldpc
-             for details). Default is "minimum_sum" as in https://arxiv.org/pdf/2308.07915.pdf.
+             for details). Default is "product_sum" because it achieves better accuracy in the
+             surface code memory experiment.
         osd_method
             The method of ordered statistics decoding to use. Paseed to
             `ldpc.bposd_decoder` as the `osd_method` argument. Options include "osd0",
@@ -238,7 +240,7 @@ class BP_OSD:
         circuit: stim.Circuit,
         *,
         max_bp_iters: int = 20,
-        bp_method: str = "minimum_sum",
+        bp_method: str = "product_sum",
         osd_method: str = "osd0",
         **kwargs
     ) -> "BP_OSD":
@@ -257,7 +259,8 @@ class BP_OSD:
             The method of belief-propagation to use. Passed to
             `ldpc.bp_decoder` as the `bp_method` argument. Options include "product_sum",
              "minimum_sum", "product_sum_log", and "minimum_sum_log" (see https://github.com/quantumgizmos/ldpc
-             for details). Default is "minimum_sum" as in https://arxiv.org/pdf/2308.07915.pdf.
+             for details). Default is "product_sum" because it achieves better accuracy in the
+             surface code memory experiment.
         osd_method
             The method of ordered statistics decoding to use. Paseed to
             `ldpc.bposd_decoder` as the `osd_method` argument. Options include "osd0",
