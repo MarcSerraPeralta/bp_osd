@@ -24,8 +24,5 @@ dependencies = [
 ]
 keywords = ["quantum", "error correction", "bposd", "decoder", "bp-osd"]
 
-[tools.setuptools]
-packages = ["bp_osd"]
-
 [project.optional-dependencies]
 dev = ["pip-tools", "pytest", "pymatching"]
