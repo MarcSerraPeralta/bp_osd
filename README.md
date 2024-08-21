@@ -1,5 +1,8 @@
 # bp_osd: Belief propagation with ordered statistics decoding post-processing
 
+> [!WARNING]  
+> This repo is no longer mantained. The functionality has been moved to `https://github.com/MarcSerraPeralta/dem-decoders`. 
+
 This is a wrapper for the `ldpc.bposd_decoder` to work with `stim`. 
 
 Example of usage:
